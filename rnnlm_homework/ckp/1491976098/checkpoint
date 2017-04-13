@@ -1,0 +1,2 @@
+model_checkpoint_path: "rnnlm_90-693760"
+all_model_checkpoint_paths: "rnnlm_90-693760"
