@@ -6,6 +6,8 @@ Created on 2017年4月10日
 import tensorflow as tf
 from tensorflow.contrib import layers
 from tensorflow.contrib import rnn  # rnn stuff temporarily in contrib, moving back to code in TF 1.1
+import sys
+import getopt
 import os
 import time
 import math
@@ -24,6 +26,7 @@ class rnnlm(object):
                  embed_size,
                  hid_size,
                  nb_layers,
+                 act_func = tf.nn.tanh,
                  learning_rate = 0.001,
                  pr_keep = 1.0                 
                  ):
@@ -32,6 +35,7 @@ class rnnlm(object):
         self.seq_size = seq_size
         self.embed_size = embed_size
         self.hid_size = hid_size
+        self.act_func = act_func
         self.nb_layers = nb_layers
         self.lr = learning_rate
         self.pr_keep = pr_keep
@@ -61,6 +65,7 @@ class rnnlm(object):
         Embedding Matrix: 
             id ->Matrix(vocab_size, embed_size)-> word embedding vector (rnn's input)
         '''
+#         word_embeds = tf.Variable(initial_value = self.dp.embeddings, dtype = "float32", name = 'Embeddings')
         word_embeds = tf.Variable(tf.random_normal([self.vocab_size, self.embed_size], name = 'Embeddings'))
         '''
         batch_X_idx: [batch_size, seq_size]
@@ -97,7 +102,7 @@ class rnnlm(object):
             batch_seqlen specifies the actual length of each sequences,
             batch_gru_O has the sequences with padding by zeros.
         '''
-        gru_cell = rnn.GRUCell(self.hid_size)
+        gru_cell = rnn.GRUCell(self.hid_size, activation=self.act_func)
         gru_cell_dropped = rnn.DropoutWrapper(gru_cell, input_keep_prob = pr_keep)
         stacked_cells = rnn.MultiRNNCell([gru_cell_dropped] * self.nb_layers, state_is_tuple = False)
         stacked_cells_dropped = rnn.DropoutWrapper(stacked_cells, output_keep_prob = pr_keep)
@@ -568,10 +573,11 @@ class rnnlm(object):
                         the hidden state for next batch may be it or just zero state
                         because word sentences start and end by SST and SET respectly
                 '''
-                _, batch_Ho, summ = sess.run(['trainer', 'Ho:0', 'summ_op:0'],
-                                       feed_dict = tr_feed_dict)
-                
-                train_writer.add_summary(summ, global_step = step)
+#                 _, batch_Ho, summ = sess.run(['trainer', 'Ho:0', 'summ_op:0'],
+#                                        feed_dict = tr_feed_dict)
+#                 train_writer.add_summary(summ, global_step = step)
+
+                sess.run(['trainer'], feed_dict = tr_feed_dict)
                 
                 if valid:
                     '''
@@ -590,9 +596,10 @@ class rnnlm(object):
                         'ph_Mask:0':        batch_Mask
                     }
                     
-                    tr_loss, tr_acc = sess.run(['batch_loss:0', 'batch_acc:0'],
+                    tr_loss, tr_acc, summ = sess.run(['batch_loss:0', 'batch_acc:0', 'summ_op:0'],
                                                feed_dict = valid_on_training_batch_feed_dict)
-                    
+                    train_writer.add_summary(summ, global_step = step)
+
                     print("\ntrain over %4d step， (epoch %2d) :" % (step, epoch))
                     print("batch_loss : %.3f, batch_acc : %.1f%%" % (tr_loss, tr_acc * 100))
                     
@@ -646,6 +653,7 @@ class rnnlm(object):
                 
 #                 batch_Hin = batch_Ho
                 step += self.batch_size
+        print("\nTraining finished")
         return
     
     def fetch_variable_value_dict(self, sess):
@@ -696,66 +704,124 @@ class rnnlm(object):
 
 if __name__ == '__main__':
     
-    SEQLEN = 48
-    BATCHSIZE = 32
-    VOCABSIZE = 3000
-    EMBEDSIZE = 128
-    INTERNALSIZE = 100
-    NLAYERS = 2
-    learning_rate = 0.001
-    dropout_pkeep = 0.8    # 1.0 => no dropout
+    default_seqsize = 48
+    default_batchsize = 32
+    default_vocabsize = 3000
+    default_embedsize = 128
+    default_hiddesize = 100
+    default_nb_layers = 1
+    default_learning_rate = 0.001
+    default_pkeep = 1.0     # 1.0 => no dropout
+    default_max_epochs = 111
+    default_act_func = tf.nn.tanh
     
-    datadir = 'E:/data/phd/datasets/childrenreading/the_little_prince.csv'
+    default_run_mode = 'train'
+    default_data_path = './data/the_little_prince.csv'
+    default_ckp_dir = ''
+    default_ckp_prefix = ''
     
-    ''' first run, save DataProcessor, train model, save checkpoint '''
-#     dp = utils.DataProcessor()
-#     dp.loadLittlePrince(datadir, VOCABSIZE)
-#     dp.save_data_processor()
-#     lm = rnnlm(data_processor = dp, 
-#                batch_size = BATCHSIZE,
-#                seq_size = SEQLEN,
-#                hid_size = INTERNALSIZE,
-#                nb_layers = NLAYERS,
-#                embed_size = EMBEDSIZE,
-#                learning_rate = learning_rate,
-#                pr_keep = dropout_pkeep
-#                )
-#     lm.train_model(
-#         nb_epochs = 1000, 
-#         valid_freq = 20, 
-#         show_freq = 40, 
-#         gener_freq = 60, 
-#         save_freq = 80, 
-#         is_from_ckp = False, 
-#         ckp_config = None
-#         )
+    shortopts = 'm:s:b:v:e:h:k:a:'
+    longopts = [
+        'max_epochs=',
+        'seq_size=',
+        'batch_size=',
+        'vocab_size=',
+        'embed_size='
+        'hidde_size=', 
+        'keep_prob=',
+        'act_func=',
+        'mode=',
+        'data_path=',
+        'ckp_dir=',
+        'ckp_prefix='
+                ]
     
-    ''' later run load DataProcessor and checkpoint, test/continue train the model'''
+    opts, args = getopt.getopt(sys.argv[1:], 
+                               shortopts=shortopts, 
+                               longopts=longopts)
+    for opt, val in opts:
+        if opt in {'--embed_size','-e'}:
+            default_embedsize = eval(val)
+        if opt in {'--vocab_size','-v'}:
+            default_vocabsize = eval(val)
+        if opt in {'--seq_size','-s'}:
+            default_seqsize = eval(val)
+        if opt in {'--hide_size','-h'}:
+            default_hiddesize = eval(val)
+        if opt in {'--keep_prob','-k'}:
+            default_pkeep = eval(val)
+        if opt in {'--max_epoch','-m'}:
+            default_max_epochs = eval(val)
+        if opt in {'--batch_size','-b'}:
+            default_batchsize = eval(val)
+        if opt in {'--act_func','-a'}:
+            if val == 'tanh':
+                default_act_func = tf.nn.tanh
+            elif val == 'relu':
+                default_act_func = tf.nn.relu
+            elif val == 'elu':
+                default_act_func = tf.nn.elu
+
+        if opt == '--mode':
+            default_run_mode = val
+        if opt == '--data_path':
+            default_data_path = val
+        if opt == '--ckp_dir':
+            default_ckp_dir = val
+        if opt == '--ckp_prefix':
+            default_ckp_prefix = val
+
+
+    '''
+    first run, save DataProcessor, train model, save checkpoint
+    later run load DataProcessor and checkpoint, test/continue train the model
+    '''
+    
     dp = utils.DataProcessor()
-    dp.load_data_processor()
+    if not os.path.exists('./dp/data_processor'):
+        dp.loadLittlePrince(default_data_path, default_vocabsize, True)
+        dp.save_data_processor()
+    else:
+        dp.load_data_processor()
+    
     lm = rnnlm(data_processor = dp, 
-               batch_size = BATCHSIZE,
-               seq_size = SEQLEN,
-               hid_size = INTERNALSIZE,
-               nb_layers = NLAYERS,
-               embed_size = EMBEDSIZE,
-               learning_rate = 0.001,
-               pr_keep = 0.75
+               batch_size = default_batchsize,
+               seq_size = default_seqsize,
+               hid_size = default_hiddesize,
+               act_func = default_act_func,
+               nb_layers = default_nb_layers,
+               embed_size = default_embedsize,
+               learning_rate = default_learning_rate,
+               pr_keep = default_pkeep
                )
-     
-    ckp_config = {'dir':'./ckp/1491976098/', 'prefix':'rnnlm_90-693760'}
-     
-#     lm.test_trained_model(ckp_config['dir'], ckp_config['prefix'])
-     
-    lm.train_model(
-        nb_epochs = 1000, 
-        valid_freq = 20, 
-        show_freq = 40, 
-        gener_freq = 60, 
-        save_freq = 80,
-        is_from_ckp = True, 
-        ckp_config = ckp_config
-        )
+    
+    if default_ckp_dir != '' and default_ckp_prefix != '':
+        is_from_ckp = True
+        ckp_config = {'dir':default_ckp_dir, 'prefix':default_ckp_prefix}
+    else:
+        is_from_ckp = False
+        ckp_config = None
+    
+    if default_run_mode == 'train':
+        print('Train Mode')
+        lm.train_model(
+            nb_epochs = default_max_epochs, 
+            valid_freq = 20, 
+            show_freq = 40, 
+            gener_freq = 60, 
+            save_freq = 80,
+            is_from_ckp = is_from_ckp, 
+            ckp_config = ckp_config
+            )
+    elif default_run_mode == 'test':
+        print("Test Mode")
+        lm.test_trained_model(ckp_config['dir'], ckp_config['prefix'])        
+    else:
+        print("illegal mode config")
+    
+    
+    
+
     
     
     

@@ -8,10 +8,10 @@ import shutil
 import glob
 import pickle
 import itertools
-import operator
-import sys
 import nltk
 import numpy as np
+import matplotlib.pyplot as plt
+
 
 class FileProcessor(object):
     
@@ -44,7 +44,7 @@ class DataProcessor(object):
         self.end_token = 'SET'
         self.unk_token = 'UNK'
     
-    def loadLittlePrince(self, path, vocabulary_size = 3000):
+    def loadLittlePrince(self, path, vocabulary_size = 3000, show_distr = False):
         '''
         load the 'The little Prince' text 
         create the vocabulary table from the text
@@ -111,15 +111,29 @@ class DataProcessor(object):
         '''
         statistic sentence length information for decision of seq_size in rnnlm
         '''
-        len_sentences = [len(sent) for sent in tokenized_sentences]
+        len_sentences = np.array([len(sent) for sent in tokenized_sentences])
+        len_sentences.sort()
+                
+        nb_sentences = len(sentences)
+        min_sent_len = int( np.min(len_sentences) )
         max_sent_len = int( np.max(len_sentences) )
         median_sent_len = int( np.median(len_sentences) )
         mean_sent_len = int( np.mean(len_sentences) )
-            
-        print ("Parsed %d sentences" % (len(sentences)))
+        
+        
+        print ("\nParsed %d sentences" % (nb_sentences))
+        print ("Min length of sentences : %d" % (min_sent_len))
         print ("Max length of sentences : %d" % (max_sent_len))
         print ("Median length of sentences : %d" % (median_sent_len))
-        print ("Mean length of sentences : %d" % (mean_sent_len))
+        print ("Mean length of sentences : %d\n" % (mean_sent_len))
+        
+        if show_distr:
+            percents_list = np.array([0.5, 0.7, 0.9, 0.95, 0.99, 1-(1e-5)])
+            bounds = self.plot_len_distribution(len_sentences, percents_list)
+             
+            for i in range(len(bounds)):
+                print("%.0f%% sentences under the length of %d" % (percents_list[i] * 100, 
+                                                                   bounds[i]))
         
         '''keep data needed'''
         self.idx_sentences = idx_sentences
@@ -136,7 +150,7 @@ class DataProcessor(object):
 #         print(vocab)
         train_rate = 0.7
         self.idx_cut = int( self.nb_sents * train_rate )
-        print("Training data (%.1f%%): No. 1 ~ %d sentences" % (
+        print("\nTraining data (%.1f%%): No. 1 ~ %d sentences" % (
             train_rate*100, 
             self.idx_cut)
               )
@@ -148,8 +162,105 @@ class DataProcessor(object):
         self.train_sentences = self.idx_sentences[:self.idx_cut]
         self.valid_sentences = self.idx_sentences[self.idx_cut:]
         
-        print ("The Little Prince loaded successfully")
+        print ("\nThe Little Prince loaded successfully")
         return self.train_sentences, self.valid_sentences
+    
+    def load_pretrained_embeddings(self, embed_dir, embed_size=100):        
+        assert os.path.exists(embed_dir), "embed_dir does not exist"
+        assert self.w2i is not None, "vocabulary does not exist"
+        
+        embeddings = np.random.uniform(
+            low = -1.0, 
+            high = 1.0, 
+            size = (self.vocabsize, embed_size)
+            )
+        nb_pretrained = 0
+        with open(
+            embed_dir + 'glove.6B.%dd.txt' % (embed_size), 
+            'rt',
+            encoding='utf-8'
+            ) as f:
+            for line in f:
+                line_split = line.split()
+                w = line_split[0]
+                if w in self.w2i.keys():
+                    w_idx = self.w2i[w]
+                    w_embedding = np.array(line_split[1:])
+                    w_embedding = w_embedding.astype(np.float32)
+                    embeddings[w_idx] = w_embedding
+                    nb_pretrained += 1
+        
+        self.embeddings = embeddings
+        print("load pretrained embeddings %s success" % (str(self.embeddings.shape)))
+        print("#pretrained/#vocabulary = %.1f%%(%d/%d)" % (
+            nb_pretrained * 100.0 / self.vocabsize,
+            nb_pretrained,
+            self.vocabsize
+            ))
+        return self.embeddings
+    
+    def words_between_train_and_valid(self, training, validation, i2w=None):
+        train_words = set()
+        for sent in training:
+            train_words |= set(sent)
+        valid_words = set()
+        for sent in validation:
+            valid_words |= set(sent) 
+        
+        all_words = train_words | valid_words        
+        inter = train_words & valid_words
+        
+        tr_rate = len(train_words) * 100.0 / len(all_words)
+        va_rate = len(valid_words) * 100.0 / len(all_words)
+        com_v_tr = len(inter) * 100.0 / len(train_words)
+        com_v_va = len(inter) * 100.0 / len(valid_words)
+        
+        print("training set (%.1f%%) and validation set (%.1f%%) have %d words in common" % (
+            tr_rate,
+            va_rate,
+            len(inter)
+            ))
+        print("%.1f%% in training set, %.1f%% in validation set" % (com_v_tr, com_v_va))
+        
+        if i2w is not None:
+            inter = list(inter)
+            inter.sort(reverse=False)
+            inter_word = [self.i2w[idx] for idx in inter]        
+            print("they are :")        
+            print(inter_word)
+        return
+    
+    def plot_len_distribution(self, lens_sorted, percents_list):
+        nb_sentences = len(lens_sorted)
+        idx_list = np.int32(np.floor( percents_list * nb_sentences))
+        bound_list = lens_sorted[idx_list]
+        plt.hist(lens_sorted, bins=100)
+        locs, _ = plt.yticks()        
+        plt.vlines(bound_list, ymin=locs[0], ymax=locs[-1], colors='red')
+        for i  in range(len(percents_list)):
+            plt.text(
+                bound_list[i], 
+                locs[-1] * percents_list[i], 
+                s = "%.0f%%" % (percents_list[i] * 100),
+                color = 'orange',
+                va = 'top'
+                )
+            plt.text(
+                bound_list[i], 
+                locs[0]-5, 
+                s = "%d" % (bound_list[i]),
+                color = 'red',
+                ha = 'center',
+                va = 'top'
+                )
+            
+        plt.title("sentence length distribution")
+        plt.ylabel('count')
+        plt.xlabel('sentence length')
+        plt.show()
+        return bound_list
+        
+        
     
     def get_sequence_from_sentences(self, sentences):
         return list(itertools.chain.from_iterable(sentences))
@@ -355,11 +466,6 @@ class DataProcessor(object):
                                            )
         return
     
-    def test_vocab_i2w_w2i_order(self):
-        print(self.vocab)
-        print(self.i2w)
-        print(self.w2i)
-    
 class Progress:
     """Text mode progress bar.
     Usage:
@@ -432,19 +538,24 @@ def dict_comparison(dict1, dict2, is_show_differences = False):
     return equal_flag
 
 if __name__ == '__main__':
-#     np.random.seed(0)
-    datadir = 'E:/data/phd/datasets/childrenreading/the_little_prince.csv'
+    
+    tlp_dir = 'E:/data/phd/datasets/childrenreading/the_little_prince.csv'
+    imdb_dir = 'E:/data/phd/datasets/imdb/imdb.npz'
+    embed_dir = 'E:/data/phd/datasets/glove.6B/'
     dp1 = DataProcessor()
     dp2 = DataProcessor()
-    
-    dp1.loadLittlePrince(datadir)
-    dp1.save_data_processor()
-    
-    dp2.load_data_processor()
+        
+#     dp1.loadLittlePrince(tlp_dir)
+#     dp1.load_pretrained_embeddings(embed_dir)
+#     dp1.words_between_train_and_valid(dp1.train_sentences, dp1.valid_sentences)
 #     dp1.save_data_processor()
+    
+#     dp2.load_data_processor()
 #     dp1.test_display_all_members()
 #     dp2.test_display_all_members()
-#     dp2.loadLittlePrince(datadir)
     
-    print(dict_comparison(dp1.w2i, dp2.w2i))
+#     print(dict_comparison(dp1.w2i, dp2.w2i))
 #     dp2.test_vocab_i2w_w2i_order()
+
+
+    
