@@ -1,2 +1,2 @@
 # NeuralNetworkHomework
-Homework for course artifical neural network homework
+Homework for course artifical neural network
